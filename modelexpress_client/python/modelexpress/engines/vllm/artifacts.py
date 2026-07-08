@@ -19,6 +19,7 @@ from hashlib import sha256
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Iterator
+import re
 
 import torch
 
@@ -232,6 +233,15 @@ def _install_vllm_cache_artifact_once(
         _write_marker(marker_path, header.artifact_id)
         return header
 
+def _parse_draft_model_idx(model_name: str) -> int | None:
+    """
+    Extract draft_model_idx from model name. Otherwise, return None
+    """
+
+    match = re.search(r"::draft(\d+)$", model_name)
+    if match:
+        return int(match.group(1))
+    return None
 
 def _publish_vllm_cache_artifact(
     ctx: LoadContext,
@@ -240,7 +250,7 @@ def _publish_vllm_cache_artifact(
 ) -> PublishedArtifactSource:
     if ctx.nixl_manager is None:
         raise RuntimeError("NIXL manager is required for vLLM artifact publish")
-    worker_grpc_server = _get_worker_server(ctx.device_id)
+    worker_grpc_server = _get_worker_server((ctx.device_id, _parse_draft_model_idx(identity.model_name) or 0))
     if worker_grpc_server is None:
         raise RuntimeError("P2P worker gRPC server is required for artifact publish")
     required_roots = tuple(

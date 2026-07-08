@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("modelexpress.load_strategy")
 
-
+MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS = 4
 class SourceTransferError(Exception):
     """Raised when a failure is demonstrably from the remote source side.
 
@@ -118,6 +118,16 @@ def _metadata_publication_configured(ctx: LoadContext) -> bool:
     return getattr(ctx.mx_client, "REQUIRES_P2P_METADATA", False) is True
 
 
+def _parse_draft_model_idx(model_name: str) -> int | None:
+    """
+    Extract draft_model_idx from model name. Otherwise, return None
+    """
+
+    match = re.search(r"::draft(\d+)$", model_name)
+    if match:
+        return int(match.group(1))
+    return None
+
 def register_tensors(
     result_or_model: LoadResult | nn.Module,
     ctx: LoadContext,
@@ -184,7 +194,8 @@ def register_tensors(
 
         if ctx.nixl_manager is None:
             base_port = envs.MX_METADATA_PORT
-            listen_port = base_port + ctx.device_id
+            draft_idx = _parse_draft_model_idx(ctx.identity.model_name) or 0
+            listen_port = base_port + ctx.device_id * MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + draft_idx
             ctx.nixl_manager = _init_nixl_manager(
                 ctx.global_rank,
                 ctx.device_id,

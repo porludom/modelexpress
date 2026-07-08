@@ -285,7 +285,7 @@ def _get_model_name(
         )
     )
     
-    if draft_model_idx:
+    if draft_model_idx is not None:
         return f"{base_name}::draft{draft_model_idx}"
     return base_name
 
@@ -329,7 +329,7 @@ def _get_sglang_worker_rank(
     except Exception:
         base_rank = int(getattr(load_config, "tp_rank", 0) or 0)
 
-    if draft_model_idx:
+    if draft_model_idx is not None:
         base_rank += draft_model_idx * _DRAFT_RANK_STRIDE
     return base_rank
 

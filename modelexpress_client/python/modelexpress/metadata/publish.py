@@ -33,14 +33,9 @@ PUBLISH_METADATA_RETRYABLE_STATUS_CODES = {
 }
 MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS = 4
 
-# Global storage for heartbeat threads and worker servers, keyed by device_id.
+# Global storage for heartbeat threads and worker servers, keyed by device_id and draft model.
 _heartbeat_threads: dict[int, PublisherThread] = {}
 _worker_servers: dict[tuple[int, int], "WorkerGrpcServer"] = {}  # P2P mode only
-
-
-def _get_worker_server(device_id: int) -> "WorkerGrpcServer | None":
-    return _worker_servers.get(device_id)
-
 
 def build_source_identity(
     vllm_config, model_config,
@@ -164,7 +159,9 @@ def publish_metadata_and_ready(
             worker_rank=worker_rank,
         )
         actual_port = grpc_server.start()
-        _worker_servers[device_id] = grpc_server
+
+        key = (device_id, draft_model_idx or 0)
+        _worker_servers[key] = grpc_server
 
         worker = p2p_pb2.WorkerMetadata(
             worker_rank=worker_rank,
@@ -189,8 +186,8 @@ def publish_metadata_and_ready(
             return mx_source_id
 
         def cleanup_fn() -> None:
-            if _worker_servers.get(device_id) is grpc_server:
-                _worker_servers.pop(device_id, None)
+            if _worker_servers.get(key) is grpc_server:
+                _worker_servers.pop(key, None)
             grpc_server.stop()
     else:
         worker = p2p_pb2.WorkerMetadata(
