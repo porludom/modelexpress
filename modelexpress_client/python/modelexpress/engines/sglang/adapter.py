@@ -46,6 +46,7 @@ class SglangAdapter(EngineAdapter):
     def build_identity(self) -> p2p_pb2.SourceIdentity:
         return build_sglang_source_identity(
             model_config=self.model_config,
+            draft_model_idx=getattr(self.load_config, "draft_model_idx", None),
         )
 
     def get_worker_rank(self) -> int:
@@ -242,7 +243,7 @@ def _call_sglang_post_load_weights(model: torch.nn.Module) -> None:
             post_load_weights()
 
 
-def build_sglang_source_identity(model_config: ModelConfig) -> p2p_pb2.SourceIdentity:
+def build_sglang_source_identity(model_config: ModelConfig, draft_model_idx: int | None = None) -> p2p_pb2.SourceIdentity:
     """Build a ModelExpress SourceIdentity from SGLang model state."""
     try:
         mx_version = pkg_version("modelexpress")
@@ -252,7 +253,7 @@ def build_sglang_source_identity(model_config: ModelConfig) -> p2p_pb2.SourceIde
     return p2p_pb2.SourceIdentity(
         mx_version=mx_version,
         mx_source_type=p2p_pb2.MX_SOURCE_TYPE_WEIGHTS,
-        model_name=_get_model_name(model_config),
+        model_name=_get_model_name(model_config, draft_model_idx),
         backend_framework=p2p_pb2.BACKEND_FRAMEWORK_SGLANG,
         tensor_parallel_size=_get_parallel_size(
             "get_tensor_model_parallel_world_size"
@@ -269,15 +270,21 @@ def build_sglang_source_identity(model_config: ModelConfig) -> p2p_pb2.SourceIde
     )
 
 
-def _get_model_name(model_config: ModelConfig) -> str:
-    return str(
+def _get_model_name(
+    model_config: ModelConfig,
+    draft_model_idx: int | None = None,
+) -> str:
+    base_name = str(
         getattr(
             model_config,
             "model_path",
             getattr(model_config, "model", ""),
         )
     )
-
+    
+    if draft_model_idx:
+        return f"{base_name}::draft{draft_model_idx}"
+    return base_name
 
 def _get_dtype(model_config: ModelConfig) -> str:
     dtype = getattr(model_config, "dtype", "")
