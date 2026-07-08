@@ -34,7 +34,7 @@ _tensor_registry: dict[tuple[int, int], dict[str, torch.Tensor]] = {}
 _nixl_managers: dict[tuple[int, int], NixlTransferManager] = {}
 
 def _registry_key(ctx: LoadContext) -> tuple[int, int]:
-    return (ctx.device_id, getattr(ctx.load_config, "draft_model_idx", None))
+    return (ctx.device_id, getattr(ctx.load_config, "draft_model_idx", None) or 0)
 
 class MxModelLoader:
     """Unified ModelExpress loader for SGLang.

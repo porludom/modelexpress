@@ -9,7 +9,7 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar
-
+import re
 import torch.nn as nn
 
 from .. import envs
@@ -278,7 +278,7 @@ def unpublish_metadata(ctx: LoadContext) -> None:
                 f"[Worker {ctx.global_rank}] Failed to stop heartbeat cleanly: {e}"
             )
 
-    ws = _worker_servers.pop(ctx.device_id, None)
+    ws = _worker_servers.pop((ctx.device_id, _parse_draft_model_idx(ctx.identity.model_name) or 0), None)
     if ws is not None:
         try:
             ws.stop()
