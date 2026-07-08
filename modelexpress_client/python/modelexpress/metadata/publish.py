@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+import re
 from typing import TYPE_CHECKING
 
 import grpc
@@ -30,10 +31,11 @@ PUBLISH_METADATA_RETRYABLE_STATUS_CODES = {
     grpc.StatusCode.UNAVAILABLE,
     grpc.StatusCode.DEADLINE_EXCEEDED,
 }
+MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS = 4
 
 # Global storage for heartbeat threads and worker servers, keyed by device_id.
 _heartbeat_threads: dict[int, PublisherThread] = {}
-_worker_servers: dict[int, "WorkerGrpcServer"] = {}  # P2P mode only
+_worker_servers: dict[tuple[int, int], "WorkerGrpcServer"] = {}  # P2P mode only
 
 
 def _get_worker_server(device_id: int) -> "WorkerGrpcServer | None":
@@ -111,6 +113,15 @@ def build_tensor_protos(
         for name, t in tensors.items()
     ]
 
+def _parse_draft_model_idx(model_name: str) -> int | None:
+    """
+    Extract draft_model_idx from model name. Otherwise, return None
+    """
+
+    match = re.search(r"::draft(\d+)$", model_name)
+    if match:
+        return int(match.group(1))
+    return None
 
 def publish_metadata_and_ready(
     mx_client: MxClient,
@@ -140,7 +151,9 @@ def publish_metadata_and_ready(
         host = _get_worker_host()
 
         grpc_base = envs.MX_WORKER_GRPC_PORT
-        worker_grpc_port = grpc_base + device_id
+        
+        draft_model_idx = _parse_draft_model_idx(identity.model_name)
+        worker_grpc_port = grpc_base + device_id * MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + (draft_model_idx or 0)
 
         grpc_server = WorkerGrpcServer(
             tensor_protos=tensor_protos,

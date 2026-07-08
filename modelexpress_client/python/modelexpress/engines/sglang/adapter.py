@@ -28,6 +28,9 @@ if TYPE_CHECKING:
     from sglang.srt.configs.model_config import ModelConfig
 
 
+_DRAFT_RANK_STRIDE = 1_000
+
+
 class SglangAdapter(EngineAdapter):
     """Adapter that maps strategy hooks onto SGLang's native loader APIs."""
 
@@ -50,7 +53,7 @@ class SglangAdapter(EngineAdapter):
         )
 
     def get_worker_rank(self) -> int:
-        return _get_sglang_worker_rank(self.load_config)
+        return _get_sglang_worker_rank(self.load_config, getattr(self.load_config, "draft_model_idx", None))
 
     def get_global_rank(self) -> int:
         if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -311,7 +314,10 @@ def _get_parallel_size(name: str) -> int:
         return 1
 
 
-def _get_sglang_worker_rank(load_config: LoadConfig) -> int:
+def _get_sglang_worker_rank(
+        load_config: LoadConfig,
+        draft_model_idx: int | None = None,
+) -> int:
     """Return the SGLang model-parallel shard key, excluding DP replicas."""
     try:
         from sglang.srt import distributed
@@ -319,9 +325,13 @@ def _get_sglang_worker_rank(load_config: LoadConfig) -> int:
         tp_rank = int(distributed.get_tensor_model_parallel_rank())
         pp_rank = int(distributed.get_pipeline_model_parallel_rank())
         tp_size = int(distributed.get_tensor_model_parallel_world_size())
-        return pp_rank * tp_size + tp_rank
+        base_rank = pp_rank * tp_size + tp_rank
     except Exception:
-        return int(getattr(load_config, "tp_rank", 0) or 0)
+        base_rank = int(getattr(load_config, "tp_rank", 0) or 0)
+
+    if draft_model_idx:
+        base_rank += draft_model_idx * _DRAFT_RANK_STRIDE
+    return base_rank
 
 
 def build_sglang_load_context(

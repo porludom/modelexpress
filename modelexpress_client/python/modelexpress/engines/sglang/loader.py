@@ -30,9 +30,11 @@ if TYPE_CHECKING:
     from sglang.srt.configs.model_config import ModelConfig
 
 
-_tensor_registry: dict[int, dict[str, torch.Tensor]] = {}
-_nixl_managers: dict[int, NixlTransferManager] = {}
+_tensor_registry: dict[tuple[int, int], dict[str, torch.Tensor]] = {}
+_nixl_managers: dict[tuple[int, int], NixlTransferManager] = {}
 
+def _registry_key(ctx: LoadContext) -> tuple[int, int]:
+    return (ctx.device_id, getattr(ctx.load_config, "draft_model_idx", None))
 
 class MxModelLoader:
     """Unified ModelExpress loader for SGLang.
@@ -96,11 +98,12 @@ class MxModelLoader:
         )
         model = LoadStrategyChain.run(model, ctx)
 
-        _tensor_registry[ctx.device_id] = ctx.tensors
+        key = _registry_key(ctx)
+        _tensor_registry[key] = ctx.tensors
         if ctx.nixl_manager is not None:
-            _nixl_managers[ctx.device_id] = ctx.nixl_manager
+            _nixl_managers[key] = ctx.nixl_manager
         else:
-            _nixl_managers.pop(ctx.device_id, None)
+            _nixl_managers.pop(key, None)
 
         total_time = time.perf_counter() - load_start
         logger.info(
