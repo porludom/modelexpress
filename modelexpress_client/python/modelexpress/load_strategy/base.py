@@ -194,8 +194,17 @@ def register_tensors(
 
         if ctx.nixl_manager is None:
             base_port = envs.MX_METADATA_PORT
-            draft_idx = _parse_draft_model_idx(ctx.identity.model_name) or -1
-            listen_port = base_port + ctx.device_id * MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + draft_idx
+            draft_idx = _parse_draft_model_idx(ctx.identity.model_name) 
+            draft_slot = (
+                draft_idx + 1
+                if draft_idx is not None
+                else 0
+            )
+            listen_port = (
+                base_port
+                + ctx.device_id * (MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + 1)
+                + draft_slot
+            )
             ctx.nixl_manager = _init_nixl_manager(
                 ctx.global_rank,
                 ctx.device_id,
@@ -278,7 +287,8 @@ def unpublish_metadata(ctx: LoadContext) -> None:
                 f"[Worker {ctx.global_rank}] Failed to stop heartbeat cleanly: {e}"
             )
 
-    ws = _worker_servers.pop((ctx.device_id, _parse_draft_model_idx(ctx.identity.model_name) or -1), None)
+    idx = _parse_draft_model_idx(ctx.identity.model_name)
+    ws = _worker_servers.pop((ctx.device_id, -1 if idx is None else idx), None)
     if ws is not None:
         try:
             ws.stop()

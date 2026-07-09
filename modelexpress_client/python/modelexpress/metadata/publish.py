@@ -147,8 +147,18 @@ def publish_metadata_and_ready(
 
         grpc_base = envs.MX_WORKER_GRPC_PORT
         
+
         draft_model_idx = _parse_draft_model_idx(identity.model_name)
-        worker_grpc_port = grpc_base + device_id * MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + (draft_model_idx or -1)
+        draft_slot = (
+            draft_model_idx + 1
+            if draft_model_idx is not None
+            else 0
+        )
+        worker_grpc_port = (
+            grpc_base
+            + device_id * (MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + 1)
+            + draft_slot
+        )
 
         grpc_server = WorkerGrpcServer(
             tensor_protos=tensor_protos,
@@ -160,7 +170,7 @@ def publish_metadata_and_ready(
         )
         actual_port = grpc_server.start()
 
-        key = (device_id, draft_model_idx or -1)
+        key = (device_id, -1 if draft_model_idx is None else draft_model_idx)
         _worker_servers[key] = grpc_server
 
         worker = p2p_pb2.WorkerMetadata(

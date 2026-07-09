@@ -348,7 +348,7 @@ def _get_sglang_worker_rank(
         base_rank = int(getattr(load_config, "tp_rank", 0) or 0)
 
     if draft_model_idx is not None:
-        base_rank += draft_model_idx * _DRAFT_RANK_STRIDE
+        base_rank += (draft_model_idx + 1) * _DRAFT_RANK_STRIDE
     return base_rank
 
 
