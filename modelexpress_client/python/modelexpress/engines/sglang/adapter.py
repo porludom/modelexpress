@@ -49,11 +49,11 @@ class SglangAdapter(EngineAdapter):
     def build_identity(self) -> p2p_pb2.SourceIdentity:
         return build_sglang_source_identity(
             model_config=self.model_config,
-            draft_model_idx=getattr(self.load_config, "draft_model_idx", None),
+            draft_model_idx=_effective_draft_idx(self.model_config, self.load_config),
         )
 
     def get_worker_rank(self) -> int:
-        return _get_sglang_worker_rank(self.load_config, getattr(self.load_config, "draft_model_idx", None))
+        return _get_sglang_worker_rank(self.load_config, _effective_draft_idx(self.model_config, self.load_config))
 
     def get_global_rank(self) -> int:
         if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -272,6 +272,24 @@ def build_sglang_source_identity(model_config: ModelConfig, draft_model_idx: int
         revision=_get_revision(model_config),
     )
 
+
+def _effective_draft_idx(
+    model_config: ModelConfig,
+    load_config: LoadConfig,
+) -> int | None:
+    """Resolve the draft-model index used to disambiguate identity/rank.
+ 
+    SGLang only sets ``load_config.draft_model_idx`` for multi-layer EAGLE
+    sub-runners (0, 1, 2, ...); a plain single-layer draft worker leaves it
+    ``None`` even though it *is* a draft model
+    (``model_config.is_draft_model`` is True). 
+    """
+    idx = getattr(load_config, "draft_model_idx", None)
+    if idx is not None:
+        return idx
+    if getattr(model_config, "is_draft_model", False):
+        return 0
+    return None
 
 def _get_model_name(
     model_config: ModelConfig,

@@ -240,7 +240,7 @@ def _parse_draft_model_idx(model_name: str) -> int | None:
 
     match = re.search(r"::draft(\d+)$", model_name)
     if match:
-        return int(match.group(1))
+        return int(match.group(1)) 
     return None
 
 def _publish_vllm_cache_artifact(
@@ -250,7 +250,7 @@ def _publish_vllm_cache_artifact(
 ) -> PublishedArtifactSource:
     if ctx.nixl_manager is None:
         raise RuntimeError("NIXL manager is required for vLLM artifact publish")
-    worker_grpc_server = _get_worker_server((ctx.device_id, _parse_draft_model_idx(identity.model_name) or 0))
+    worker_grpc_server = _get_worker_server((ctx.device_id, _parse_draft_model_idx(identity.model_name) or -1))
     if worker_grpc_server is None:
         raise RuntimeError("P2P worker gRPC server is required for artifact publish")
     required_roots = tuple(
