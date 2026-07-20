@@ -21,6 +21,10 @@ from ...metadata.publish import _heartbeat_threads
 from ...nixl_transfer import NixlTransferManager
 from ...source_selection import get_configured_selector
 from .adapter import build_sglang_load_context
+from .artifacts import (
+    install_sglang_cache_artifacts,
+    schedule_sglang_cache_artifact_publish,
+)
 
 logger = logging.getLogger("modelexpress.engines.sglang.loader")
 
@@ -99,6 +103,7 @@ class MxModelLoader:
             ctx.global_rank,
             ctx.identity.model_name,
         )
+        install_sglang_cache_artifacts(ctx)
         model = LoadStrategyChain.run(model, ctx)
 
         key = _registry_key(ctx)
@@ -107,6 +112,8 @@ class MxModelLoader:
             _nixl_managers[key] = ctx.nixl_manager
         else:
             _nixl_managers.pop(key, None)
+
+        schedule_sglang_cache_artifact_publish(ctx)
 
         total_time = time.perf_counter() - load_start
         logger.info(
@@ -342,6 +349,7 @@ class MxModelLoader:
                 worker_rank=ctx.worker_rank,
                 transfer_engine_session_id=session_id,
                 tensor_source=tensor_source_metadata(tensors),
+                accelerator=ctx.accelerator_backend.name,
             )
         except Exception:
             logger.exception(
