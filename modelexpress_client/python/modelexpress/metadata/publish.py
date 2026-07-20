@@ -37,6 +37,11 @@ PUBLISH_METADATA_RETRYABLE_STATUS_CODES = {
 _heartbeat_threads: dict[int, PublisherThread] = {}
 _worker_servers: dict[tuple[int, int], "WorkerGrpcServer"] = {}  # P2P mode only
 
+
+def _get_worker_server(device_id: int, draft_model_idx: int | None) -> "WorkerGrpcServer | None":
+    return _worker_servers.get((device_id, -1 if draft_model_idx is None else draft_model_idx))
+
+
 def build_source_identity(
     vllm_config, model_config,
 ) -> p2p_pb2.SourceIdentity:

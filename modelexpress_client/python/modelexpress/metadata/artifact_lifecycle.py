@@ -35,6 +35,7 @@ from .artifact_transfer import (
 )
 from .publisher import PublisherThread
 from .publish import _get_worker_server, _is_p2p_metadata_enabled
+from ..rank_utils import parse_draft_model_idx
 
 logger = logging.getLogger("modelexpress.metadata.artifact_lifecycle")
 
@@ -238,7 +239,7 @@ def publish_artifact(
         raise RuntimeError(
             f"NIXL manager is required for {engine_label} artifact publish"
         )
-    worker_grpc_server = _get_worker_server(ctx.device_id)
+    worker_grpc_server = _get_worker_server((ctx.device_id, parse_draft_model_idx(identity.model_name)))
     if worker_grpc_server is None:
         raise RuntimeError("P2P worker gRPC server is required for artifact publish")
 
