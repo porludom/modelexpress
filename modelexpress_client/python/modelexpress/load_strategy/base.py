@@ -17,6 +17,7 @@ from ..nixl_transfer import is_nixl_available
 from ..tensor_utils import log_tensor_summary
 from ..metadata.publish import publish_metadata_and_ready
 from .context import LoadContext, LoadResult
+from ..rank_utils import parse_draft_model_idx, compute_draft_slot
 
 if TYPE_CHECKING:
     from ..accelerators import AcceleratorBackend
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("modelexpress.load_strategy")
 
-MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS = 4
 class SourceTransferError(Exception):
     """Raised when a failure is demonstrably from the remote source side.
 
@@ -118,16 +118,6 @@ def _metadata_publication_configured(ctx: LoadContext) -> bool:
     return getattr(ctx.mx_client, "REQUIRES_P2P_METADATA", False) is True
 
 
-def _parse_draft_model_idx(model_name: str) -> int | None:
-    """
-    Extract draft_model_idx from model name. Otherwise, return None
-    """
-
-    match = re.search(r"::draft(\d+)$", model_name)
-    if match:
-        return int(match.group(1))
-    return None
-
 def register_tensors(
     result_or_model: LoadResult | nn.Module,
     ctx: LoadContext,
@@ -196,17 +186,19 @@ def register_tensors(
 
         if ctx.nixl_manager is None:
             base_port = envs.MX_METADATA_PORT
-            draft_idx = _parse_draft_model_idx(ctx.identity.model_name) 
-            draft_slot = (
-                draft_idx + 1
-                if draft_idx is not None
-                else 0
-            )
+
+            draft_idx = parse_draft_model_idx(ctx.identity.model_name) 
+            if draft_idx is not None and draft_idx >= envs.MAX_DRAFT_MODELS:
+                raise ValueError(f"draft model {draft_idx} exceeds MAX_DRAFT_MODELS")
+            
+            draft_slot = compute_draft_slot (draft_idx)
+    
             listen_port = (
                 base_port
-                + ctx.device_id * (MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + 1)
+                + ctx.device_id * (envs.MAX_DRAFT_MODELS + 1) # draft models + main model
                 + draft_slot
             )
+            
             ctx.nixl_manager = _init_nixl_manager(
                 ctx.global_rank,
                 ctx.device_id,
@@ -290,7 +282,7 @@ def unpublish_metadata(ctx: LoadContext) -> None:
                 f"[Worker {ctx.global_rank}] Failed to stop heartbeat cleanly: {e}"
             )
 
-    idx = _parse_draft_model_idx(ctx.identity.model_name)
+    idx = parse_draft_model_idx(ctx.identity.model_name)
     ws = _worker_servers.pop((ctx.device_id, -1 if idx is None else idx), None)
     if ws is not None:
         try:

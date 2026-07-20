@@ -18,6 +18,7 @@ from .publisher import PublisherThread
 from .payload import tensor_source_metadata
 from ..client import MxClient
 from .. import p2p_pb2
+from ..rank_utils import parse_draft_model_idx, compute_draft_slot
 
 if TYPE_CHECKING:
     from ..nixl_transfer import NixlTransferManager
@@ -31,7 +32,6 @@ PUBLISH_METADATA_RETRYABLE_STATUS_CODES = {
     grpc.StatusCode.UNAVAILABLE,
     grpc.StatusCode.DEADLINE_EXCEEDED,
 }
-MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS = 4
 
 # Global storage for heartbeat threads and worker servers, keyed by device_id and draft model.
 _heartbeat_threads: dict[int, PublisherThread] = {}
@@ -108,15 +108,6 @@ def build_tensor_protos(
         for name, t in tensors.items()
     ]
 
-def _parse_draft_model_idx(model_name: str) -> int | None:
-    """
-    Extract draft_model_idx from model name. Otherwise, return None
-    """
-
-    match = re.search(r"::draft(\d+)$", model_name)
-    if match:
-        return int(match.group(1))
-    return None
 
 def publish_metadata_and_ready(
     mx_client: MxClient,
@@ -149,15 +140,11 @@ def publish_metadata_and_ready(
         grpc_base = envs.MX_WORKER_GRPC_PORT
         
 
-        draft_model_idx = _parse_draft_model_idx(identity.model_name)
-        draft_slot = (
-            draft_model_idx + 1
-            if draft_model_idx is not None
-            else 0
-        )
+        draft_model_idx = parse_draft_model_idx(identity.model_name)
+        draft_slot = compute_draft_slot(draft_model_idx)
         worker_grpc_port = (
             grpc_base
-            + device_id * (MAX_POSSIBLE_NUMBER_OF_DRAFT_MODELS + 1)
+            + device_id * (envs.MAX_DRAFT_MODELS + 1)
             + draft_slot
         )
 

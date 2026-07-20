@@ -9,7 +9,6 @@ import logging
 import tempfile
 from importlib.metadata import version as pkg_version
 from pathlib import Path
-from typing import Iterator
 import re
 
 import torch
@@ -30,6 +29,7 @@ from ...metadata.artifact_transfer import (
     torch_compile_cache_artifact_transfer,
 )
 from ...metadata.publisher import PublisherThread
+from ...rank_utils import parse_draft_model_idx
 
 logger = logging.getLogger("modelexpress.engines.vllm.artifacts")
 
@@ -77,16 +77,6 @@ def _install_vllm_cache_artifact_once(
         identity,
         engine_label="vLLM",
     )
-
-def _parse_draft_model_idx(model_name: str) -> int | None:
-    """
-    Extract draft_model_idx from model name. Otherwise, return None
-    """
-
-    match = re.search(r"::draft(\d+)$", model_name)
-    if match:
-        return int(match.group(1)) 
-    return None
 
 def _publish_vllm_cache_artifact(
     ctx: LoadContext,

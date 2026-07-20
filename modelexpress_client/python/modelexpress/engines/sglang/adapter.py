@@ -27,10 +27,6 @@ if TYPE_CHECKING:
     from sglang.srt.configs.load_config import LoadConfig
     from sglang.srt.configs.model_config import ModelConfig
 
-
-_DRAFT_RANK_STRIDE = 1_000
-
-
 class SglangAdapter(EngineAdapter):
     """Adapter that maps strategy hooks onto SGLang's native loader APIs."""
 
@@ -286,7 +282,7 @@ def _effective_draft_idx(
     SGLang only sets ``load_config.draft_model_idx`` for multi-layer EAGLE
     sub-runners (0, 1, 2, ...); a plain single-layer draft worker leaves it
     ``None`` even though it *is* a draft model
-    (``model_config.is_draft_model`` is True). 
+    (``model_config.is_draft_model`` is True).
     """
     idx = getattr(load_config, "draft_model_idx", None)
     if idx is not None:
@@ -352,7 +348,8 @@ def _get_sglang_worker_rank(
         base_rank = int(getattr(load_config, "tp_rank", 0) or 0)
 
     if draft_model_idx is not None:
-        base_rank += (draft_model_idx + 1) * _DRAFT_RANK_STRIDE
+        assert base_rank < envs.DRAFT_RANK_STRIDE, "Increase DRAFT_RANK_STRIDE to maximum of pp_size * tp_size in your case."
+        base_rank += (draft_model_idx + 1) * envs.DRAFT_RANK_STRIDE
     return base_rank
 
 

@@ -112,6 +112,9 @@ if TYPE_CHECKING:
     POD_NAMESPACE: str
     POD_NAME: str
     POD_UID: str
+    MAX_DRAFT_MODELS: int
+    DRAFT_RANK_STRIDE: int
+
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -227,7 +230,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "HOSTNAME": lambda: os.environ.get("HOSTNAME", ""),
     "POD_NAMESPACE": lambda: os.environ.get("POD_NAMESPACE", ""),
     "POD_NAME": lambda: os.environ.get("POD_NAME", ""),
-    "POD_UID": lambda: os.environ.get("POD_UID", "")
+    "POD_UID": lambda: os.environ.get("POD_UID", ""),
+    "MAX_DRAFT_MODELS": lambda: _env_int("MAX_DRAFT_MODELS", 3),
+    "DRAFT_RANK_STRIDE": lambda: _env_int("DRAFT_RANK_STRIDE", 1000),
 }
 
 
