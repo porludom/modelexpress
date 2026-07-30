@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from sglang.srt.configs.load_config import LoadConfig
     from sglang.srt.configs.model_config import ModelConfig
 
-
 class SglangAdapter(EngineAdapter):
     """Adapter that maps strategy hooks onto SGLang's native loader APIs."""
 
@@ -50,10 +49,11 @@ class SglangAdapter(EngineAdapter):
     def build_identity(self) -> p2p_pb2.SourceIdentity:
         return build_sglang_source_identity(
             model_config=self.model_config,
+            draft_model_idx=_effective_draft_idx(self.model_config, self.load_config),
         )
 
     def get_worker_rank(self) -> int:
-        return _get_sglang_worker_rank(self.load_config)
+        return _get_sglang_worker_rank(self.load_config, _effective_draft_idx(self.model_config, self.load_config))
 
     def get_global_rank(self) -> int:
         if torch.distributed.is_available() and torch.distributed.is_initialized():
@@ -234,7 +234,7 @@ def _call_sglang_post_load_weights(model: torch.nn.Module) -> None:
             post_load_weights()
 
 
-def build_sglang_source_identity(model_config: ModelConfig) -> p2p_pb2.SourceIdentity:
+def build_sglang_source_identity(model_config: ModelConfig, draft_model_idx: int | None = None) -> p2p_pb2.SourceIdentity:
     """Build a ModelExpress SourceIdentity from SGLang model state."""
     try:
         mx_version = pkg_version("modelexpress")
@@ -244,7 +244,7 @@ def build_sglang_source_identity(model_config: ModelConfig) -> p2p_pb2.SourceIde
     return p2p_pb2.SourceIdentity(
         mx_version=mx_version,
         mx_source_type=p2p_pb2.MX_SOURCE_TYPE_WEIGHTS,
-        model_name=_get_model_name(model_config),
+        model_name=_get_model_name(model_config, draft_model_idx),
         backend_framework=p2p_pb2.BACKEND_FRAMEWORK_SGLANG,
         tensor_parallel_size=_get_parallel_size(
             "get_tensor_model_parallel_world_size"
@@ -261,8 +261,29 @@ def build_sglang_source_identity(model_config: ModelConfig) -> p2p_pb2.SourceIde
     )
 
 
-def _get_model_name(model_config: ModelConfig) -> str:
-    return str(
+def _effective_draft_idx(
+    model_config: ModelConfig,
+    load_config: LoadConfig,
+) -> int | None:
+    """Resolve the draft-model index used to disambiguate identity/rank.
+
+    SGLang only sets ``load_config.draft_model_idx`` for multi-layer EAGLE
+    sub-runners (0, 1, 2, ...); a plain single-layer draft worker leaves it
+    ``None`` even though it *is* a draft model
+    (``model_config.is_draft_model`` is True).
+    """
+    idx = getattr(load_config, "draft_model_idx", None)
+    if idx is not None:
+        return idx
+    if getattr(model_config, "is_draft_model", False):
+        return 0
+    return None
+
+def _get_model_name(
+    model_config: ModelConfig,
+    draft_model_idx: int | None = None,
+) -> str:
+    base_name = str(
         getattr(
             model_config,
             "model_path",
@@ -270,6 +291,9 @@ def _get_model_name(model_config: ModelConfig) -> str:
         )
     )
 
+    if draft_model_idx is not None:
+        return f"{base_name}::draft{draft_model_idx}"
+    return base_name
 
 def _get_dtype(model_config: ModelConfig) -> str:
     dtype = getattr(model_config, "dtype", "")
@@ -296,7 +320,10 @@ def _get_parallel_size(name: str) -> int:
         return 1
 
 
-def _get_sglang_worker_rank(load_config: LoadConfig) -> int:
+def _get_sglang_worker_rank(
+        load_config: LoadConfig,
+        draft_model_idx: int | None = None,
+) -> int:
     """Return the SGLang model-parallel shard key, excluding DP replicas."""
     try:
         from sglang.srt import distributed
@@ -304,9 +331,18 @@ def _get_sglang_worker_rank(load_config: LoadConfig) -> int:
         tp_rank = int(distributed.get_tensor_model_parallel_rank())
         pp_rank = int(distributed.get_pipeline_model_parallel_rank())
         tp_size = int(distributed.get_tensor_model_parallel_world_size())
-        return pp_rank * tp_size + tp_rank
+        base_rank = pp_rank * tp_size + tp_rank
     except Exception:
-        return int(getattr(load_config, "tp_rank", 0) or 0)
+        base_rank = int(getattr(load_config, "tp_rank", 0) or 0)
+
+    if draft_model_idx is not None:
+        if base_rank >= envs.DRAFT_RANK_STRIDE:
+            raise ValueError(
+                f"base_rank={base_rank} >= DRAFT_RANK_STRIDE={envs.DRAFT_RANK_STRIDE}; "
+                "increase DRAFT_RANK_STRIDE to at least pp_size * tp_size"
+            )
+        base_rank += (draft_model_idx + 1) * envs.DRAFT_RANK_STRIDE
+    return base_rank
 
 
 def build_sglang_load_context(

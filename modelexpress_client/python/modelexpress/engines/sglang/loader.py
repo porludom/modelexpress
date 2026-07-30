@@ -35,8 +35,15 @@ if TYPE_CHECKING:
     from sglang.srt.configs.model_config import ModelConfig
 
 
-_tensor_registry: dict[int, dict[str, torch.Tensor]] = {}
-_nixl_managers: dict[int, NixlTransferManager] = {}
+_tensor_registry: dict[tuple[int, int], dict[str, torch.Tensor]] = {}
+_nixl_managers: dict[tuple[int, int], NixlTransferManager] = {}
+
+
+def _registry_key(ctx: LoadContext) -> tuple[int, int]:
+    idx = getattr(ctx.load_config, "draft_model_idx", None)
+    if idx is None: # will have 0 idx, not to collide with main model
+        idx = 0 if getattr(ctx.model_config, "is_draft_model", False) else -1
+    return (ctx.device_id, idx)
 
 
 class MxModelLoader:
@@ -104,11 +111,12 @@ class MxModelLoader:
         install_sglang_cache_artifacts(ctx)
         model = LoadStrategyChain.run(model, ctx)
 
-        _tensor_registry[ctx.device_id] = ctx.tensors
+        key = _registry_key(ctx)
+        _tensor_registry[key] = ctx.tensors
         if ctx.nixl_manager is not None:
-            _nixl_managers[ctx.device_id] = ctx.nixl_manager
+            _nixl_managers[key] = ctx.nixl_manager
         else:
-            _nixl_managers.pop(ctx.device_id, None)
+            _nixl_managers.pop(key, None)
 
         schedule_sglang_cache_artifact_publish(ctx)
 
