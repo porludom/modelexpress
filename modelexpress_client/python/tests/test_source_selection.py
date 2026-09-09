@@ -10,18 +10,21 @@ metadata-miss fallback, and the no-retry-after-transfer-start rule).
 
 from __future__ import annotations
 
+import gc
 import logging
+import weakref
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from modelexpress import p2p_pb2
-from modelexpress.adapter import StrategyFailed
-from modelexpress.load_strategy.base import LoadResult
+from modelexpress.adapter import StrategyFailed, StrategyRecoveryError
+from modelexpress.load_strategy.base import LoadResult, clear_exception_tracebacks
 from modelexpress.load_strategy.rdma_strategy import MAX_SOURCE_RETRIES, RdmaStrategy
 from modelexpress.source_selection import (
     ENV_SELECTOR,
+    LoadAwareSelector,
     RandomSelector,
     RendezvousHashSelector,
     configured_policy_label,
@@ -42,18 +45,47 @@ def _ctx(worker_id="target-0", worker_rank=0, model_name="m"):
     )
 
 
-def _ref(mx_source_id, worker_id, worker_rank=0, model_name="m", accelerator=""):
+def _ref(
+    mx_source_id,
+    worker_id,
+    worker_rank=0,
+    model_name="m",
+    accelerator="",
+    source_load=0.0,
+):
     return p2p_pb2.SourceInstanceRef(
         mx_source_id=mx_source_id,
         worker_id=worker_id,
         model_name=model_name,
         worker_rank=worker_rank,
         accelerator=accelerator,
+        source_load=source_load,
     )
 
 
 def _sources(n, worker_rank=0):
     return [_ref(f"src{i:04x}aaaaaaaaaa", f"w{i}", worker_rank) for i in range(n)]
+
+
+def test_clear_exception_tracebacks_releases_transfer_frame_locals():
+    class Allocation:
+        pass
+
+    def fail_with_local_allocation():
+        allocation = Allocation()
+        allocation_ref = weakref.ref(allocation)
+        try:
+            raise RuntimeError("transfer failed")
+        except RuntimeError as exc:
+            return exc, allocation_ref
+
+    exc, allocation_ref = fail_with_local_allocation()
+    assert allocation_ref() is not None
+
+    clear_exception_tracebacks(exc)
+    gc.collect()
+
+    assert allocation_ref() is None
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +265,56 @@ def test_find_source_instances_empty_on_list_error():
     ctx = _rdma_ctx([])
     ctx.mx_client.list_sources.side_effect = RuntimeError("grpc down")
     assert RdmaStrategy()._find_source_instances(ctx) == []
+
+
+def test_no_peers_published_records_a_zero_funnel(monkeypatch):
+    """The empty path must observe zero, not return before recording anything.
+
+    ``_find_source_instances`` used to return early when the response carried no
+    instances, before any ``observe_candidates`` call. That made
+    ``mx_p2p_candidates{stage="listed"}`` unable to ever observe zero — the one
+    bucket that separates "no peers published" from "peers listed but every one
+    filtered out". On a dashboard the two were the same absence.
+    """
+    m = MagicMock()
+    monkeypatch.setattr("modelexpress.load_strategy.rdma_strategy.selection_metrics", m)
+    monkeypatch.delenv(ENV_SELECTOR, raising=False)
+
+    ctx = _rdma_ctx([])
+    assert RdmaStrategy()._find_source_instances(ctx) == []
+
+    m.record_list_sources.assert_called_once_with("random", "empty")
+    observed = {call.args[1]: call.args[2] for call in m.observe_candidates.call_args_list}
+    assert observed == {"listed": 0, "rank_matched": 0, "accelerator_matched": 0}
+
+
+def test_list_sources_rpc_failure_is_recorded_not_silent(monkeypatch):
+    """A backend outage used to record nothing at all.
+
+    Both a Redis outage and a healthy cluster with no peers presented as the same
+    absence, so the graph could not tell "the metadata backend is down" from
+    "nobody has published weights yet".
+    """
+    m = MagicMock()
+    monkeypatch.setattr("modelexpress.load_strategy.rdma_strategy.selection_metrics", m)
+    monkeypatch.delenv(ENV_SELECTOR, raising=False)
+
+    ctx = _rdma_ctx([])
+    ctx.mx_client.list_sources.side_effect = RuntimeError("grpc down")
+    assert RdmaStrategy()._find_source_instances(ctx) == []
+
+    m.record_list_sources.assert_called_once_with("random", "error")
+
+
+def test_successful_listing_records_an_ok_outcome(monkeypatch):
+    m = MagicMock()
+    monkeypatch.setattr("modelexpress.load_strategy.rdma_strategy.selection_metrics", m)
+    monkeypatch.setenv(ENV_SELECTOR, "rendezvous_hash")
+
+    ctx = _rdma_ctx([_ref("s0aaaaaaaaaaaaaa", "w0", worker_rank=0)])
+    RdmaStrategy()._find_source_instances(ctx)
+
+    m.record_list_sources.assert_called_once_with("rendezvous_hash", "ok")
 
 
 def test_find_source_instances_filters_incompatible_accelerator():
@@ -588,8 +670,15 @@ def test_load_transfer_failure_reinitializes_and_tries_next_source():
     strat._load_as_target = MagicMock(
         side_effect=[StrategyFailed("receive failed", mutated=True), "loaded"]
     )
-    original_result = MagicMock(name="original-result")
-    retry_result = MagicMock(name="retry-result")
+    original_model = MagicMock(name="original-model")
+    retry_model = MagicMock(name="retry-model")
+    original_result = LoadResult(value=original_model, model=original_model)
+    retry_result = LoadResult(
+        value=retry_model,
+        model=retry_model,
+        publishable=False,
+        metadata={"retry": True},
+    )
     ctx = MagicMock(global_rank=0)
     ctx.accelerator_backend.name = ""  # unknown target -> accelerator gate accepts
     ctx.adapter.reinit_for_retry.return_value = retry_result
@@ -605,8 +694,32 @@ def test_load_transfer_failure_reinitializes_and_tries_next_source():
     assert strat._fetch_worker_metadata.call_count == 2
     assert strat._load_as_target.call_count == 2
     ctx.adapter.reinit_for_retry.assert_called_once()
-    assert ctx.adapter.reinit_for_retry.call_args.args[0].value is original_result
-    assert strat._load_as_target.call_args_list[1].args[0] is retry_result
+    retry_envelope = strat._load_as_target.call_args_list[1].args[0]
+    assert ctx.adapter.reinit_for_retry.call_args.args[0] is retry_envelope
+    assert retry_envelope.value is retry_result.value
+    assert retry_envelope.model is retry_result.model
+    assert retry_envelope.publishable is False
+    assert retry_envelope.metadata == {"retry": True}
+
+
+@pytest.mark.parametrize("vmm_arena", [None, object()])
+def test_load_transfer_failure_supports_identity_preserving_retry(vmm_arena):
+    strat = RdmaStrategy()
+    strat._find_source_instances = MagicMock(return_value=_sources(2))
+    strat._fetch_worker_metadata = MagicMock(return_value=MagicMock())
+    strat._load_as_target = MagicMock(
+        side_effect=[StrategyFailed("receive failed", mutated=True), "loaded"]
+    )
+    model = MagicMock(name="engine-owned-model-root")
+    result = LoadResult(value=model, model=model)
+    ctx = MagicMock(global_rank=0)
+    ctx.accelerator_backend.name = ""
+    ctx.vmm_arena = vmm_arena
+    ctx.adapter.reinit_for_retry.side_effect = lambda current: current
+
+    assert strat.load(result, ctx) == "loaded"
+    assert strat._load_as_target.call_args_list[1].args[0] is result
+    assert ctx.vmm_arena is vmm_arena
 
 
 def test_load_clean_transfer_failure_tries_next_source_without_reinit():
@@ -623,7 +736,7 @@ def test_load_clean_transfer_failure_tries_next_source_without_reinit():
     ctx.adapter.reinit_for_retry.assert_not_called()
 
 
-def test_load_requires_outer_reinit_after_reinit_then_metadata_miss():
+def test_load_internal_reinit_is_visible_after_later_metadata_miss():
     strat = RdmaStrategy()
     strat._find_source_instances = MagicMock(return_value=_sources(2))
     strat._fetch_worker_metadata = MagicMock(side_effect=[MagicMock(), None])
@@ -646,12 +759,12 @@ def test_load_requires_outer_reinit_after_reinit_then_metadata_miss():
     with pytest.raises(StrategyFailed) as exc:
         strat.load(original_result, ctx)
 
-    assert exc.value.mutated is True
-    assert original_result.model is None
+    assert exc.value.mutated is False
+    assert original_result.model is not None
     ctx.adapter.reinit_for_retry.assert_called_once()
 
 
-def test_load_requires_outer_reinit_after_reinit_then_clean_failure():
+def test_load_internal_reinit_then_clean_failure_stays_clean():
     strat = RdmaStrategy()
     strat._find_source_instances = MagicMock(return_value=_sources(2))
     strat._fetch_worker_metadata = MagicMock(return_value=MagicMock())
@@ -668,11 +781,28 @@ def test_load_requires_outer_reinit_after_reinit_then_clean_failure():
     with pytest.raises(StrategyFailed, match="clean failure") as exc:
         strat.load(MagicMock(), ctx)
 
-    assert exc.value.mutated is True
+    assert exc.value.mutated is False
     ctx.adapter.reinit_for_retry.assert_called_once()
 
 
-def test_load_reinit_failure_remains_mutated():
+def test_load_last_candidate_mutated_failure_propagates_mutated():
+    strat = RdmaStrategy()
+    strat._find_source_instances = MagicMock(return_value=_sources(1))
+    strat._fetch_worker_metadata = MagicMock(return_value=MagicMock())
+    strat._load_as_target = MagicMock(
+        side_effect=StrategyFailed("mutated failure", mutated=True)
+    )
+    ctx = MagicMock(global_rank=0)
+    ctx.accelerator_backend.name = ""
+
+    with pytest.raises(StrategyFailed, match="mutated failure") as exc:
+        strat.load(MagicMock(), ctx)
+
+    assert exc.value.mutated is True
+    ctx.adapter.reinit_for_retry.assert_not_called()
+
+
+def test_load_reinit_failure_is_unrecoverable():
     strat = RdmaStrategy()
     strat._find_source_instances = MagicMock(return_value=_sources(2))
     strat._fetch_worker_metadata = MagicMock(return_value=MagicMock())
@@ -683,10 +813,10 @@ def test_load_reinit_failure_remains_mutated():
     ctx.accelerator_backend.name = ""
     ctx.adapter.reinit_for_retry.side_effect = RuntimeError("reinit failed")
 
-    with pytest.raises(StrategyFailed, match="reinit failed") as exc:
+    with pytest.raises(StrategyRecoveryError, match="reinit failed") as exc:
         strat.load(MagicMock(), ctx)
 
-    assert exc.value.mutated is True
+    assert isinstance(exc.value.__cause__, RuntimeError)
 
 
 def test_load_cleanup_failure_aborts_before_reinit():
@@ -787,6 +917,11 @@ def test_load_records_success_metrics(monkeypatch):
     ctx.accelerator_backend.name = ""  # unknown target -> accelerator gate accepts
 
     assert strat.load(MagicMock(), ctx) == "loaded"
+    # The peer id is still passed; the collector drops it unless
+    # MX_METRICS_SOURCE_ID_LABEL=1, because it is a per-process uuid whose label
+    # domain grows with process count rather than with cluster size. That the
+    # label really is absent by default is asserted on the exposition itself in
+    # tests/test_metrics.py.
     m.record_selection.assert_called_once_with("random", cands[0].worker_id)
     m.record_attempt.assert_any_call("random", "success")
     assert m.observe_transfer_seconds.call_args.args[:2] == ("random", "success")
@@ -841,3 +976,187 @@ def test_load_records_metadata_miss_metric(monkeypatch):
     assert m.record_attempt.call_count == MAX_SOURCE_RETRIES
     m.record_attempt.assert_called_with("random", "metadata_miss")
     m.record_selection.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LoadAwareSelector (bandwidth-aware)
+# ---------------------------------------------------------------------------
+
+
+def test_load_aware_registered():
+    assert get_selector("load_aware").name == "load_aware"
+
+
+def test_load_aware_collapses_to_rendezvous_when_idle(monkeypatch):
+    # With every source's source_load at 0, the load term vanishes and the
+    # ordering must equal rendezvous_hash exactly (safe degradation).
+    monkeypatch.delenv("MX_P2P_LOAD_WEIGHT", raising=False)
+    ctx = _ctx()
+    srcs = _sources(6)
+    load = LoadAwareSelector().order(srcs, ctx)
+    rdv = RendezvousHashSelector().order(srcs, ctx)
+    assert [c.worker_id for c in load] == [c.worker_id for c in rdv]
+
+
+def test_load_aware_steers_away_from_busy_source(monkeypatch):
+    # A source that would win on the hash but is busy must be demoted below an
+    # idle peer when the load penalty outweighs the hash gap.
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+    ctx = _ctx()
+    srcs = _sources(4)
+    rdv_first = RendezvousHashSelector().order(srcs, ctx)[0].worker_id
+    busy = [
+        _ref(c.mx_source_id, c.worker_id, source_load=1.0 if c.worker_id == rdv_first else 0.0)
+        for c in srcs
+    ]
+    ordered = LoadAwareSelector().order(busy, ctx)
+    assert ordered[0].worker_id != rdv_first
+    assert ordered[-1].worker_id == rdv_first
+
+
+def test_load_aware_deterministic(monkeypatch):
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+    ctx = _ctx()
+    srcs = [_ref(f"src{i:04x}aa", f"w{i}", source_load=0.1 * i) for i in range(5)]
+    a = [c.worker_id for c in LoadAwareSelector().order(srcs, ctx)]
+    b = [c.worker_id for c in LoadAwareSelector().order(srcs, ctx)]
+    assert a == b
+
+
+def test_load_aware_weight_monotonic(monkeypatch):
+    # Higher MX_P2P_LOAD_WEIGHT means a busy source is penalized at least as hard:
+    # once it drops to last it stays last as the weight grows.
+    ctx = _ctx()
+    srcs = _sources(4)
+    rdv_first = RendezvousHashSelector().order(srcs, ctx)[0].worker_id
+    busy = [
+        _ref(c.mx_source_id, c.worker_id, source_load=0.9 if c.worker_id == rdv_first else 0.0)
+        for c in srcs
+    ]
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "0.0")
+    assert LoadAwareSelector().order(busy, ctx)[0].worker_id == rdv_first  # weight 0 == rendezvous
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "5.0")
+    assert LoadAwareSelector().order(busy, ctx)[-1].worker_id == rdv_first
+
+
+def test_load_aware_negative_weight_clamped_to_zero(monkeypatch):
+    # A negative MX_P2P_LOAD_WEIGHT would invert the policy into preferring busy
+    # sources. envs clamps it to >= 0, so it collapses to rendezvous ordering
+    # rather than rewarding load.
+    from modelexpress import envs as envs_mod
+
+    ctx = _ctx()
+    srcs = _sources(4)
+    rdv = [c.worker_id for c in RendezvousHashSelector().order(srcs, ctx)]
+    busy = [
+        _ref(c.mx_source_id, c.worker_id, source_load=0.9 if c.worker_id == rdv[0] else 0.0)
+        for c in srcs
+    ]
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "-3.0")
+    assert envs_mod.MX_P2P_LOAD_WEIGHT == 0.0
+    assert [c.worker_id for c in LoadAwareSelector().order(busy, ctx)] == rdv
+
+
+def test_load_aware_missing_field_treated_as_idle(monkeypatch):
+    # A candidate object without source_load (old server) must not raise and
+    # must behave as load 0.
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+    ctx = _ctx()
+    candidates = [
+        SimpleNamespace(mx_source_id=f"src{i}", worker_id=f"w{i}", worker_rank=0)
+        for i in range(4)
+    ]
+    ordered = LoadAwareSelector().order(candidates, ctx)
+    assert {c.worker_id for c in ordered} == {f"w{i}" for i in range(4)}
+
+
+def test_load_aware_utilization_clamped(monkeypatch):
+    # Out-of-range utilization is clamped, so a garbage value cannot invert the
+    # sign of the penalty or explode the score.
+    monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+    ctx = _ctx()
+    srcs = _sources(3)
+    hi = [_ref(c.mx_source_id, c.worker_id, source_load=42.0) for c in srcs]
+    lo = [_ref(c.mx_source_id, c.worker_id, source_load=-7.0) for c in srcs]
+    # All clamped to the same value -> both collapse to rendezvous ordering.
+    assert [c.worker_id for c in LoadAwareSelector().order(lo, ctx)] == [
+        c.worker_id for c in RendezvousHashSelector().order(srcs, ctx)
+    ]
+    # High-but-equal utilization also collapses to rendezvous (equal penalty).
+    assert [c.worker_id for c in LoadAwareSelector().order(hi, ctx)] == [
+        c.worker_id for c in RendezvousHashSelector().order(srcs, ctx)
+    ]
+
+
+class TestSourceLoadPresence:
+    """`source_load` is optional on the wire: unset is unknown, not idle.
+
+    Reviewer-found: with a plain proto3 float, a source that published NO load
+    (older client, provider with no signal) scored as 0.0 -- the best possible --
+    and systematically outranked sources reporting real load. Presence tracking
+    plus a neutral prior for unknown fixes the mixed-fleet case.
+    """
+
+    @staticmethod
+    def _ctx():
+        from types import SimpleNamespace
+        from modelexpress import p2p_pb2
+        return SimpleNamespace(
+            identity=p2p_pb2.SourceIdentity(model_name="m", mx_version="0.5.1"),
+            worker_id="target-0",
+            worker_rank=0,
+            model_name="m",
+        )
+
+    @staticmethod
+    def _ref(load):
+        # Identical identity => identical unit_hash, so only the load term differs.
+        from modelexpress import p2p_pb2
+        r = p2p_pb2.SourceInstanceRef(
+            mx_source_id="deadbeefdeadbeef", worker_id="src", worker_rank=0
+        )
+        if load is not None:
+            r.source_load = load
+        return r
+
+    def test_unknown_load_scores_as_the_neutral_prior(self, monkeypatch):
+        from modelexpress import source_selection as ss
+        monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+        sel = ss.LoadAwareSelector()
+        unknown, idle = self._ref(None), self._ref(0.0)
+        assert ss.UNKNOWN_LOAD_PRIOR == 0.5
+        assert sel.score(idle, self._ctx()) - sel.score(unknown, self._ctx()) == pytest.approx(0.5)
+
+    def test_real_reading_beats_unknown_when_real_is_lighter_than_prior(self, monkeypatch):
+        from modelexpress import source_selection as ss
+        monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+        sel = ss.LoadAwareSelector()
+        assert sel.score(self._ref(0.3), self._ctx()) > sel.score(self._ref(None), self._ctx())
+
+    def test_measured_idle_beats_unknown(self, monkeypatch):
+        from modelexpress import source_selection as ss
+        monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+        sel = ss.LoadAwareSelector()
+        assert sel.score(self._ref(0.0), self._ctx()) > sel.score(self._ref(None), self._ctx())
+
+    def test_unknown_still_beats_a_heavily_loaded_source(self, monkeypatch):
+        from modelexpress import source_selection as ss
+        monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+        sel = ss.LoadAwareSelector()
+        assert sel.score(self._ref(None), self._ctx()) > sel.score(self._ref(0.9), self._ctx())
+
+    def test_object_without_presence_tracking_counts_as_unknown(self, monkeypatch):
+        from types import SimpleNamespace
+        from modelexpress import source_selection as ss
+        monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+        sel = ss.LoadAwareSelector()
+        bare = SimpleNamespace(mx_source_id="deadbeefdeadbeef", worker_id="src", worker_rank=0, source_load=0.0)
+        assert sel.score(bare, self._ctx()) == pytest.approx(sel.score(self._ref(None), self._ctx()))
+
+    def test_all_unknown_collapses_to_rendezvous_order(self, monkeypatch):
+        from modelexpress import p2p_pb2, source_selection as ss
+        monkeypatch.setenv("MX_P2P_LOAD_WEIGHT", "1.0")
+        cands = [p2p_pb2.SourceInstanceRef(mx_source_id="deadbeefdeadbeef", worker_id=f"w{i}", worker_rank=0) for i in range(6)]
+        la = [c.worker_id for c in ss.LoadAwareSelector().order(cands, self._ctx())]
+        rz = [c.worker_id for c in ss.RendezvousHashSelector().order(cands, self._ctx())]
+        assert la == rz

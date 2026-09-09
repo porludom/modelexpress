@@ -21,8 +21,12 @@ from modelexpress.refit.reshard.geometry import (
     OpChain,
     RecordedCopy,
     UnsupportedReshard,
+    build_lazy_weights,
     capture_geometry,
+    capture_weights,
+    convert_source_weights,
 )
+from modelexpress.refit.reshard.types import IncompleteRefit
 from modelexpress.refit.reshard.transfer_plan import (
     FullPullSource,
     SourceInfo,
@@ -50,19 +54,23 @@ from modelexpress.refit.reshard.rendezvous import (
     MxReshardRendezvous,
     PublishedShard,
     PublishedTensor,
+    RendezvousPayload,
     gather_sources,
     wrap_rendezvous_blob,
 )
+from modelexpress.refit.reshard.verify import shard_region, tensor_digest
 
 __all__ = [
     "InMemoryReferenceTransport",
     "FullPullSource",
+    "IncompleteRefit",
     "LazyWeight",
     "MxReshardRendezvous",
     "NixlReshardTransport",
     "OpChain",
     "PublishedShard",
     "PublishedTensor",
+    "RendezvousPayload",
     "PullSegment",
     "ReadDescriptor",
     "RecordedCopy",
@@ -72,7 +80,10 @@ __all__ = [
     "Transport",
     "TransferPlan",
     "UnsupportedReshard",
+    "build_lazy_weights",
     "capture_geometry",
+    "capture_weights",
+    "convert_source_weights",
     "classic_cuda_alloc",
     "execute_transfer",
     "gather_sources",
@@ -81,5 +92,7 @@ __all__ = [
     "paired_runs",
     "plan_pull",
     "plan_transfer",
+    "shard_region",
+    "tensor_digest",
     "wrap_rendezvous_blob",
 ]

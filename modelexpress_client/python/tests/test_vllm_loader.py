@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 
 from modelexpress import p2p_pb2
-from modelexpress.adapter import EngineAdapter, StrategyFailed
+from modelexpress.adapter import EngineAdapter, StrategyFailed, StrategyRecoveryError
 from modelexpress.load_strategy.context import LoadResult
 from modelexpress.nixl_transfer import NixlTransferManager
 
@@ -137,6 +137,50 @@ def _make_load_context(**overrides):
     return LoadContext(**defaults)
 
 
+def test_initial_load_uses_inference_chain_by_default(monkeypatch):
+    from modelexpress.load_strategy import run_load_strategy_chain
+
+    monkeypatch.delenv("MX_LOAD_STRATEGY_CHAIN", raising=False)
+    model = MagicMock()
+    ctx = _make_load_context()
+
+    with patch(
+        "modelexpress.load_strategy.LoadStrategyChain.run",
+        return_value=model,
+    ) as inference_run:
+        assert run_load_strategy_chain(model, ctx) is model
+
+    inference_run.assert_called_once_with(model, ctx)
+
+
+def test_initial_load_uses_dedicated_rl_chain(monkeypatch):
+    from modelexpress.load_strategy import run_load_strategy_chain
+
+    monkeypatch.setenv("MX_LOAD_STRATEGY_CHAIN", "RL")
+    model = MagicMock()
+    ctx = _make_load_context()
+
+    with patch(
+        "modelexpress.load_strategy.LoadStrategyChain.run"
+    ) as inference_run, patch(
+        "modelexpress_rl.inference.load_strategy.RLLoadStrategyChain.run",
+        return_value=model,
+    ) as rl_run:
+        assert run_load_strategy_chain(model, ctx) is model
+
+    inference_run.assert_not_called()
+    rl_run.assert_called_once_with(model, ctx)
+
+
+def test_initial_load_rejects_unknown_chain(monkeypatch):
+    from modelexpress.load_strategy import run_load_strategy_chain
+
+    monkeypatch.setenv("MX_LOAD_STRATEGY_CHAIN", "unknown")
+
+    with pytest.raises(ValueError, match="MX_LOAD_STRATEGY_CHAIN"):
+        run_load_strategy_chain(MagicMock(), _make_load_context())
+
+
 class _FakeRpcError(grpc.RpcError):
     def __init__(self, status_code: grpc.StatusCode, details: str):
         super().__init__()
@@ -251,9 +295,31 @@ class TestAbstractMethodCompleteness:
     def test_download_model_delegates(self):
         loader = _make_loader()
         cfg = MagicMock()
-        with patch("modelexpress.engines.vllm.loader.DefaultModelLoader") as mock_cls:
-            loader.download_model(cfg)
-            mock_cls.return_value.download_model.assert_called_once_with(cfg)
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("modelexpress.engines.vllm.loader.DefaultModelLoader") as mock_cls:
+                loader.download_model(cfg)
+                mock_cls.return_value.download_model.assert_called_once_with(cfg)
+
+    def test_download_model_defers_without_shared_storage(self):
+        """A full pre-download here would pull weights before P2P gets a turn."""
+        loader = _make_loader()
+        cfg = MagicMock()
+        env = {
+            "MODEL_EXPRESS_NO_SHARED_STORAGE": "1",
+            "MODEL_EXPRESS_URL": "http://mx:8001",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("modelexpress.engines.vllm.loader.DefaultModelLoader") as mock_cls:
+                loader.download_model(cfg)
+                mock_cls.return_value.download_model.assert_not_called()
+
+    def test_download_model_defers_to_rl_initial_load(self):
+        loader = _make_loader()
+        cfg = MagicMock()
+        with patch.dict("os.environ", {"MX_LOAD_STRATEGY_CHAIN": "RL"}, clear=True):
+            with patch("modelexpress.engines.vllm.loader.DefaultModelLoader") as mock_cls:
+                loader.download_model(cfg)
+                mock_cls.return_value.download_model.assert_not_called()
 
     def test_load_weights_delegates(self):
         loader = _make_loader()
@@ -281,7 +347,7 @@ class TestAbstractMethodCompleteness:
                 "modelexpress.engines.vllm.loader.initialize_model",
                 return_value=model,
             ), patch(
-                "modelexpress.engines.vllm.loader.LoadStrategyChain.run",
+                "modelexpress.engines.vllm.loader.run_load_strategy_chain",
                 return_value=model,
             ):
                 loaded = loader.load_model(MagicMock(), MagicMock(dtype=torch.float32))
@@ -341,7 +407,7 @@ class TestAbstractMethodCompleteness:
             "modelexpress.engines.vllm.loader.initialize_model",
             side_effect=initialize_model,
         ), patch(
-            "modelexpress.engines.vllm.loader.LoadStrategyChain.run",
+            "modelexpress.engines.vllm.loader.run_load_strategy_chain",
             side_effect=run,
         ), patch(
             "modelexpress.engines.vllm.loader.schedule_vllm_cache_artifact_publish",
@@ -452,7 +518,7 @@ class TestMtpDrafterSecondLoad:
             "modelexpress.engines.vllm.loader.initialize_model",
             return_value=MagicMock(),
         ), patch(
-            "modelexpress.engines.vllm.loader.LoadStrategyChain.run",
+            "modelexpress.engines.vllm.loader.run_load_strategy_chain",
             side_effect=lambda model, _ctx: model,
         ), patch(
             "modelexpress.engines.vllm.loader.schedule_vllm_cache_artifact_publish",
@@ -485,6 +551,32 @@ class TestMtpDrafterSecondLoad:
         finally:
             loader_mod._tensor_registry.pop(0, None)
             loader_mod._nixl_managers.pop(0, None)
+
+    def test_rl_drafter_is_rejected_before_initialization(self):
+        """RL has no version contract for speculative draft weights."""
+        loader = _make_loader()
+        vllm_config = MagicMock()
+        model_config = MagicMock(dtype=torch.float32, runner_type="draft")
+
+        with patch.dict(
+            os.environ,
+            {
+                "MX_LOAD_STRATEGY_CHAIN": "RL",
+                "MX_REFIT_DESIRED_VERSION_UID": "main-version",
+            },
+            clear=True,
+        ), patch(
+            "modelexpress.engines.vllm.loader.build_vllm_load_context"
+        ) as build_context, patch(
+            "modelexpress.engines.vllm.loader.initialize_model"
+        ) as initialize, pytest.raises(
+            ValueError,
+            match="RL initial loading does not support speculative draft models",
+        ):
+            loader.load_model(vllm_config, model_config)
+
+        build_context.assert_not_called()
+        initialize.assert_not_called()
 
     def test_is_speculative_draft(self):
         from modelexpress.engines.vllm.loader import _is_speculative_draft
@@ -895,6 +987,53 @@ class TestLoadStrategyChainRunErrorHandling:
 
         assert call_order == ["failed", "rollback", "fallback"]
         ctx.adapter.reinit_for_retry.assert_not_called()
+
+    def test_strategy_recovery_error_aborts_without_fallback(self):
+        from modelexpress.load_strategy import LoadStrategyChain
+
+        call_order = []
+
+        def failed_recovery(self_or_result, *_args, **_kwargs):
+            call_order.append("failed")
+            raise StrategyRecoveryError("model recovery failed")
+
+        def rollback(self_or_ctx, *_args, **_kwargs):
+            call_order.append("rollback")
+
+        def fallback_load(self_or_result, *_args, **_kwargs):
+            call_order.append("fallback")
+            return self_or_result
+
+        ctx = _make_load_context()
+        with patch(
+            "modelexpress.load_strategy.rdma_strategy.RdmaStrategy.is_available",
+            return_value=False,
+        ), patch(
+            "modelexpress.load_strategy.model_streamer_strategy."
+            "ModelStreamerStrategy.is_available",
+            return_value=True,
+        ), patch(
+            "modelexpress.load_strategy.model_streamer_strategy."
+            "ModelStreamerStrategy.load",
+            failed_recovery,
+        ), patch(
+            "modelexpress.load_strategy.model_streamer_strategy."
+            "ModelStreamerStrategy.rollback",
+            rollback,
+        ), patch(
+            "modelexpress.load_strategy.gds_strategy.GdsStrategy.is_available",
+            return_value=False,
+        ), patch(
+            "modelexpress.load_strategy.default_strategy.DefaultStrategy.is_available",
+            return_value=True,
+        ), patch(
+            "modelexpress.load_strategy.default_strategy.DefaultStrategy.load",
+            fallback_load,
+        ):
+            with pytest.raises(StrategyRecoveryError, match="model recovery failed"):
+                LoadStrategyChain.run(MagicMock(), ctx)
+
+        assert call_order == ["failed", "rollback"]
 
     def test_strategy_failed_runs_rollback_and_reinit_when_mutated(self):
         from modelexpress.load_strategy import LoadStrategyChain
@@ -1718,9 +1857,10 @@ class TestConfigureVllmLogging:
 
     def _reset_mx_logger(self):
         """Clear any handlers/level from the modelexpress root logger."""
-        mx_root = logging.getLogger("modelexpress")
-        mx_root.handlers.clear()
-        mx_root.setLevel(logging.NOTSET)
+        for name in ("modelexpress", "modelexpress_rl"):
+            mx_root = logging.getLogger(name)
+            mx_root.handlers.clear()
+            mx_root.setLevel(logging.NOTSET)
 
     def _simulate_vllm_enginecore_logging(self):
         """Reproduce vLLM 0.19.0 EngineCore: only "vllm" gets a handler."""
@@ -1760,6 +1900,22 @@ class TestConfigureVllmLogging:
 
             child = logging.getLogger("modelexpress.metadata")
             assert child.getEffectiveLevel() == logging.DEBUG
+        finally:
+            self._cleanup(vllm_logger)
+
+    def test_rl_child_loggers_visible_after_configure(self):
+        from modelexpress import configure_vllm_logging
+
+        vllm_logger, handler = self._simulate_vllm_enginecore_logging()
+        try:
+            configure_vllm_logging()
+
+            rl_root = logging.getLogger("modelexpress_rl")
+            assert len(rl_root.handlers) == 1
+            assert rl_root.handlers[0] is handler
+            assert logging.getLogger(
+                "modelexpress_rl.inference.session"
+            ).getEffectiveLevel() == logging.DEBUG
         finally:
             self._cleanup(vllm_logger)
 
@@ -1823,3 +1979,78 @@ class TestConfigureVllmLogging:
             assert mx_root.level == logging.DEBUG
         finally:
             self._cleanup(vllm_logger)
+
+
+# ---------------------------------------------------------------------------
+# Compilation-state coherence across re-init (MTP target/drafter co-ownership)
+# ---------------------------------------------------------------------------
+
+
+class _RegisteredLayer(nn.Module):
+    """Stand-in for a vLLM layer that records the prefix it registered under."""
+
+    def __init__(self, layer_name):
+        super().__init__()
+        self.layer_name = layer_name
+
+
+def _make_compilation_config():
+    from collections import Counter
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        static_forward_context={},
+        static_all_moe_layers=[],
+        enabled_custom_ops=Counter(),
+        compilation_time=0.0,
+    )
+
+
+def _initialize_model(cc, prefix):
+    """Build a model under `prefix`, registering its layers the way vLLM does."""
+    from types import SimpleNamespace
+    from modelexpress.engines.vllm.adapter import VllmAdapter
+
+    model = nn.Module()
+    model.add_module("self_attn", _RegisteredLayer(f"{prefix}.layers.0.self_attn"))
+    model.add_module("mlp", _RegisteredLayer(f"{prefix}.layers.0.mlp"))
+    assert model.self_attn.layer_name not in cc.static_forward_context  # vLLM's check
+    cc.static_forward_context[model.self_attn.layer_name] = model.self_attn
+    cc.static_all_moe_layers.append(model.mlp.layer_name)
+    cc.enabled_custom_ops["rms_norm"] += 1
+
+    adapter = object.__new__(VllmAdapter)  # __init__ touches devices
+    adapter.vllm_config = SimpleNamespace(compilation_config=cc)
+    return model, adapter
+
+
+def test_unregister_leaves_co_owned_target_registrations():
+    """MTP: unregistering the drafter must not drop the live target's layers."""
+    cc = _make_compilation_config()
+    target, _ = _initialize_model(cc, "language_model.model")
+    drafter, adapter = _initialize_model(cc, "mtp")
+
+    adapter._unregister_model_layers(drafter)
+
+    assert cc.static_forward_context == {
+        "language_model.model.layers.0.self_attn": target.self_attn
+    }
+    assert cc.static_all_moe_layers == ["language_model.model.layers.0.mlp"]
+    assert cc.enabled_custom_ops["rms_norm"] == 2  # accumulating field untouched
+    _initialize_model(cc, "mtp")  # the drafter's rebuild re-registers cleanly
+
+
+def test_unregister_releases_the_discarded_model():
+    """The registries must not pin the stale model across the rebuild."""
+    import gc
+    import weakref
+
+    cc = _make_compilation_config()
+    stale, adapter = _initialize_model(cc, "language_model.model")
+    layer_ref = weakref.ref(stale.self_attn)
+
+    adapter._unregister_model_layers(stale)
+    del stale
+    gc.collect()
+
+    assert layer_ref() is None

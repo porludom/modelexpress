@@ -17,7 +17,7 @@ use std::fs;
 
 fn base_identity() -> SourceIdentity {
     SourceIdentity {
-        mx_version: "0.5.0".to_string(),
+        mx_version: "0.5.1".to_string(),
         mx_source_type: MxSourceType::Weights as i32,
         model_name: "Qwen/Qwen2.5-0.5B-Instruct".to_string(),
         backend_framework: BackendFramework::Vllm as i32,
@@ -195,6 +195,10 @@ fn k8s_metadata_contract_carries_artifact_source_type_and_summary() {
     assert_eq!(
         ModelMetadataSpec::source_type_name_from_proto(MxSourceType::FlashinferCache as i32),
         "flashinfer_cache"
+    );
+    assert_eq!(
+        ModelMetadataSpec::source_type_name_from_proto(MxSourceType::TvmFfiCache as i32),
+        "tvm_ffi_cache"
     );
 
     let worker = WorkerStatus {
