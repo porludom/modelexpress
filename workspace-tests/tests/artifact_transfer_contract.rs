@@ -34,6 +34,7 @@ fn base_identity() -> SourceIdentity {
         triton_version: String::new(),
         gpu_arch: String::new(),
         compile_config_digest: String::new(),
+        draft_model_idx: None,
     }
 }
 

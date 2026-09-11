@@ -33,12 +33,30 @@ def get_global_rank(device: torch.device) -> int:
 
 
 def compute_draft_slot(draft_idx: int | None) -> int:
+    """
+    Compute the draft slot index for a given draft model index.
+    Args:
+        draft_idx: The index of the draft model. If None, it represents the main model.
+
+    Returns:
+        The computed draft slot index. Returns 0 for the main model (None),
+        otherwise returns draft_idx + 1. (1,2,3,...)
+
+    """
     return 0 if draft_idx is None else draft_idx + 1 # if None, then it is main model with index 0. Otherwise, idx + 1
 
 
 def compute_port(base_port: int, device_id: int, draft_idx: int | None, max_draft_models: int) -> int:
+    """
+    Compute the port number for a given device ID and draft model index.
+    """
     return base_port + device_id * (max_draft_models + 1) + compute_draft_slot(draft_idx)
 
 
 def get_draft_model_idx(identity: p2p_pb2.SourceIdentity) -> int | None:
+    """
+    Get the draft model index from the source identity.
+    Returns:
+        The draft model index if it exists, otherwise None.
+    """
     return identity.draft_model_idx if identity.HasField("draft_model_idx") else None

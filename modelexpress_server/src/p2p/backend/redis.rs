@@ -138,6 +138,8 @@ struct SourceAttributesJson {
     pub gpu_arch: String,
     #[serde(default)]
     pub compile_config_digest: String,
+    #[serde(default)]
+    pub draft_model_idx: Option<i32>,
 }
 
 impl From<&SourceIdentity> for SourceAttributesJson {
@@ -160,6 +162,7 @@ impl From<&SourceIdentity> for SourceAttributesJson {
             triton_version: id.triton_version.clone(),
             gpu_arch: id.gpu_arch.clone(),
             compile_config_digest: id.compile_config_digest.clone(),
+            draft_model_idx: None,
         }
     }
 }
@@ -186,6 +189,7 @@ impl SourceAttributesJson {
             triton_version: self.triton_version.clone(),
             gpu_arch: self.gpu_arch.clone(),
             compile_config_digest: self.compile_config_digest.clone(),
+            draft_model_idx: self.draft_model_idx,
         }
     }
 }
@@ -1396,6 +1400,7 @@ mod tests {
             triton_version: String::new(),
             gpu_arch: String::new(),
             compile_config_digest: String::new(),
+            draft_model_idx: None,
         }
     }
 

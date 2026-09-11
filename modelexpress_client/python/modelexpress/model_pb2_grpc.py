@@ -8,7 +8,7 @@ import warnings
 
 from . import model_pb2 as model__pb2
 
-GRPC_GENERATED_VERSION = '1.66.2'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -28,7 +28,7 @@ if _version_not_supported:
     )
 
 
-class ModelServiceStub(object):
+class ModelServiceStub:
     """Model service for handling model downloads and status
     """
 
@@ -60,7 +60,7 @@ class ModelServiceStub(object):
                 _registered_method=True)
 
 
-class ModelServiceServicer(object):
+class ModelServiceServicer:
     """Model service for handling model downloads and status
     """
 
@@ -123,7 +123,7 @@ def add_ModelServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ModelService(object):
+class ModelService:
     """Model service for handling model downloads and status
     """
 

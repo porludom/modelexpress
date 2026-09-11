@@ -249,8 +249,10 @@ type SourceIdentity struct {
 	// Digest of source-type-specific compile/cache configuration not otherwise
 	// represented by explicit fields.
 	CompileConfigDigest string `protobuf:"bytes,17,opt,name=compile_config_digest,json=compileConfigDigest,proto3" json:"compile_config_digest,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Draft model index
+	DraftModelIdx *int32 `protobuf:"varint,18,opt,name=draft_model_idx,json=draftModelIdx,proto3,oneof" json:"draft_model_idx,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SourceIdentity) Reset() {
@@ -400,6 +402,13 @@ func (x *SourceIdentity) GetCompileConfigDigest() string {
 		return x.CompileConfigDigest
 	}
 	return ""
+}
+
+func (x *SourceIdentity) GetDraftModelIdx() int32 {
+	if x != nil && x.DraftModelIdx != nil {
+		return *x.DraftModelIdx
+	}
+	return 0
 }
 
 type TensorDescriptor struct {
@@ -2686,7 +2695,7 @@ var File_p2p_proto protoreflect.FileDescriptor
 
 const file_p2p_proto_rawDesc = "" +
 	"\n" +
-	"\tp2p.proto\x12\x11model_express.p2p\"\xf8\x06\n" +
+	"\tp2p.proto\x12\x11model_express.p2p\"\xb9\a\n" +
 	"\x0eSourceIdentity\x12\x1d\n" +
 	"\n" +
 	"mx_version\x18\x01 \x01(\tR\tmxVersion\x12E\n" +
@@ -2707,10 +2716,12 @@ const file_p2p_proto_rawDesc = "" +
 	"\fcuda_version\x18\x0e \x01(\tR\vcudaVersion\x12%\n" +
 	"\x0etriton_version\x18\x0f \x01(\tR\rtritonVersion\x12\x19\n" +
 	"\bgpu_arch\x18\x10 \x01(\tR\agpuArch\x122\n" +
-	"\x15compile_config_digest\x18\x11 \x01(\tR\x13compileConfigDigest\x1aB\n" +
+	"\x15compile_config_digest\x18\x11 \x01(\tR\x13compileConfigDigest\x12+\n" +
+	"\x0fdraft_model_idx\x18\x12 \x01(\x05H\x00R\rdraftModelIdx\x88\x01\x01\x1aB\n" +
 	"\x14ExtraParametersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x81\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +
+	"\x10_draft_model_idx\"\x81\x01\n" +
 	"\x10TensorDescriptor\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\x04R\x04addr\x12\x12\n" +
@@ -3087,6 +3098,7 @@ func file_p2p_proto_init() {
 	if File_p2p_proto != nil {
 		return
 	}
+	file_p2p_proto_msgTypes[0].OneofWrappers = []any{}
 	file_p2p_proto_msgTypes[7].OneofWrappers = []any{
 		(*WorkerMetadata_NixlMetadata)(nil),
 		(*WorkerMetadata_TransferEngineSessionId)(nil),

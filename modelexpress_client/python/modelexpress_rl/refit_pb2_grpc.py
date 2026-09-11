@@ -8,7 +8,7 @@ import warnings
 
 from . import refit_pb2 as refit__pb2
 
-GRPC_GENERATED_VERSION = '1.66.2'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -28,7 +28,7 @@ if _version_not_supported:
     )
 
 
-class RefitServiceStub(object):
+class RefitServiceStub:
     """Control-plane metadata for RL weight publication. Object-storage-backed
     versions own one global object URI; worker-sharded versions advertise
     per-worker manifests.
@@ -92,7 +92,7 @@ class RefitServiceStub(object):
                 _registered_method=True)
 
 
-class RefitServiceServicer(object):
+class RefitServiceServicer:
     """Control-plane metadata for RL weight publication. Object-storage-backed
     versions own one global object URI; worker-sharded versions advertise
     per-worker manifests.
@@ -225,7 +225,7 @@ def add_RefitServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RefitService(object):
+class RefitService:
     """Control-plane metadata for RL weight publication. Object-storage-backed
     versions own one global object URI; worker-sharded versions advertise
     per-worker manifests.
@@ -502,7 +502,7 @@ class RefitService(object):
             _registered_method=True)
 
 
-class RefitWorkerServiceStub(object):
+class RefitWorkerServiceStub:
     """Internal worker-to-worker API. The generator fetches the small transfer
     manifest here; tensor bytes remain on the advertised data-plane transport.
     """
@@ -520,7 +520,7 @@ class RefitWorkerServiceStub(object):
                 _registered_method=True)
 
 
-class RefitWorkerServiceServicer(object):
+class RefitWorkerServiceServicer:
     """Internal worker-to-worker API. The generator fetches the small transfer
     manifest here; tensor bytes remain on the advertised data-plane transport.
     """
@@ -547,7 +547,7 @@ def add_RefitWorkerServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RefitWorkerService(object):
+class RefitWorkerService:
     """Internal worker-to-worker API. The generator fetches the small transfer
     manifest here; tensor bytes remain on the advertised data-plane transport.
     """

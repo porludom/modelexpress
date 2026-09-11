@@ -8,7 +8,7 @@ import warnings
 
 from . import p2p_pb2 as p2p__pb2
 
-GRPC_GENERATED_VERSION = '1.66.2'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -28,7 +28,7 @@ if _version_not_supported:
     )
 
 
-class P2pServiceStub(object):
+class P2pServiceStub:
     """P2P Metadata Service for coordinating NIXL/RDMA transfers between vLLM instances.
     The server stores model metadata keyed by mx_source_id (a hash of SourceIdentity).
     Clients query for existing sources and publish their own metadata.
@@ -62,7 +62,7 @@ class P2pServiceStub(object):
                 _registered_method=True)
 
 
-class P2pServiceServicer(object):
+class P2pServiceServicer:
     """P2P Metadata Service for coordinating NIXL/RDMA transfers between vLLM instances.
     The server stores model metadata keyed by mx_source_id (a hash of SourceIdentity).
     Clients query for existing sources and publish their own metadata.
@@ -130,7 +130,7 @@ def add_P2pServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class P2pService(object):
+class P2pService:
     """P2P Metadata Service for coordinating NIXL/RDMA transfers between vLLM instances.
     The server stores model metadata keyed by mx_source_id (a hash of SourceIdentity).
     Clients query for existing sources and publish their own metadata.
@@ -245,7 +245,7 @@ class P2pService(object):
             _registered_method=True)
 
 
-class WorkerServiceStub(object):
+class WorkerServiceStub:
     """============================================================================
     Worker Service (P2P manifest exchange)
     ============================================================================
@@ -290,7 +290,7 @@ class WorkerServiceStub(object):
                 _registered_method=True)
 
 
-class WorkerServiceServicer(object):
+class WorkerServiceServicer:
     """============================================================================
     Worker Service (P2P manifest exchange)
     ============================================================================
@@ -368,7 +368,7 @@ def add_WorkerServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class WorkerService(object):
+class WorkerService:
     """============================================================================
     Worker Service (P2P manifest exchange)
     ============================================================================
