@@ -51,7 +51,7 @@ class SglangAdapter(EngineAdapter):
     def build_identity(self) -> p2p_pb2.SourceIdentity:
         return build_sglang_source_identity(
             model_config=self.model_config,
-            draft_model_idx=_effective_draft_idx(self.model_config, self.load_config),
+            load_config =self.load_config,
         )
 
     def get_worker_rank(self) -> int:
@@ -298,17 +298,19 @@ def _call_sglang_post_load_weights(model: torch.nn.Module) -> None:
             post_load_weights()
 
 
-def build_sglang_source_identity(model_config: ModelConfig, draft_model_idx: int | None = None) -> p2p_pb2.SourceIdentity:
+def build_sglang_source_identity(model_config: ModelConfig, load_config: LoadConfig) -> p2p_pb2.SourceIdentity:
     """Build a ModelExpress SourceIdentity from SGLang model state."""
     try:
         mx_version = pkg_version("modelexpress")
     except Exception:
         mx_version = "0.0.0"
 
-    return p2p_pb2.SourceIdentity(
+    draft_idx = _effective_draft_idx(model_config, load_config)
+
+    identity = p2p_pb2.SourceIdentity(
         mx_version=mx_version,
         mx_source_type=p2p_pb2.MX_SOURCE_TYPE_WEIGHTS,
-        model_name=_get_model_name(model_config, draft_model_idx),
+        model_name=_get_model_name(model_config, draft_idx),
         backend_framework=p2p_pb2.BACKEND_FRAMEWORK_SGLANG,
         tensor_parallel_size=_get_parallel_size(
             "get_tensor_model_parallel_world_size"
@@ -323,6 +325,10 @@ def build_sglang_source_identity(model_config: ModelConfig, draft_model_idx: int
         quantization=_get_quantization(model_config),
         revision=_get_revision(model_config),
     )
+    if draft_idx is not None:
+        identity.draft_model_idx = draft_idx
+
+    return identity
 
 
 def _effective_draft_idx(
@@ -343,21 +349,13 @@ def _effective_draft_idx(
         return 0
     return None
 
-def _get_model_name(
-    model_config: ModelConfig,
-    draft_model_idx: int | None = None,
-) -> str:
-    base_name = str(
-        getattr(
-            model_config,
-            "model_path",
-            getattr(model_config, "model", ""),
-        )
-    )
 
+def _get_model_name(model_config: ModelConfig, draft_model_idx: int | None = None) -> str:
+    base_name = str(getattr(model_config, "model_path", getattr(model_config, "model", "unknown")))
     if draft_model_idx is not None:
         return f"{base_name}::draft{draft_model_idx}"
     return base_name
+
 
 def _get_dtype(model_config: ModelConfig) -> str:
     dtype = getattr(model_config, "dtype", "")

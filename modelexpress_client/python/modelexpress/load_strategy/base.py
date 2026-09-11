@@ -17,8 +17,7 @@ from ..nixl_transfer import is_nixl_available
 from ..tensor_utils import log_tensor_summary
 from ..metadata.publish import publish_metadata_and_ready
 from .context import LoadContext, LoadResult
-from ..rank_utils import parse_draft_model_idx, compute_draft_slot
-
+from ..rank_utils import get_draft_model_idx, compute_port, compute_draft_slot
 if TYPE_CHECKING:
     from ..accelerators import AcceleratorBackend
     from ..nixl_transfer import NixlTransferManager
@@ -214,17 +213,11 @@ def register_tensors(
         if ctx.nixl_manager is None:
             base_port = envs.MX_METADATA_PORT
 
-            draft_idx = parse_draft_model_idx(ctx.identity.model_name)
+            draft_idx = get_draft_model_idx(ctx.identity)
             if draft_idx is not None and draft_idx >= envs.MAX_DRAFT_MODELS:
                 raise ValueError(f"draft model {draft_idx} exceeds MAX_DRAFT_MODELS")
 
-            draft_slot = compute_draft_slot (draft_idx)
-
-            listen_port = (
-                base_port
-                + ctx.device_id * (envs.MAX_DRAFT_MODELS + 1) # draft models + main model
-                + draft_slot
-            )
+            listen_port = compute_port(base_port, ctx.device_id, draft_idx, envs.MAX_DRAFT_MODELS)
 
             ctx.nixl_manager = _init_nixl_manager(
                 ctx.global_rank,
@@ -301,11 +294,11 @@ def unpublish_metadata(ctx: LoadContext) -> None:
     unpublish_metadata_for_worker(
         worker_rank=ctx.worker_rank,
         device_id=ctx.device_id,
-        ctx = ctx
+        draft_model_idx=get_draft_model_idx(ctx.identity),
     )
 
 
-def unpublish_metadata_for_worker(*, worker_rank: int, device_id: int, ctx = None) -> None:
+def unpublish_metadata_for_worker(*, worker_rank: int, device_id: int, draft_model_idx: int | None = None ) -> None:
     """Stop one worker's publication without requiring a boot-load context."""
     from ..metadata.publish import _heartbeat_threads, _worker_servers
 
@@ -319,10 +312,7 @@ def unpublish_metadata_for_worker(*, worker_rank: int, device_id: int, ctx = Non
                 f"[Worker {worker_rank}] Failed to stop heartbeat cleanly: {e}"
             )
 
-    idx = None
-    if ctx is not None:
-        idx = parse_draft_model_idx(ctx.identity.model_name)
-    ws = _worker_servers.pop((device_id, -1 if idx is None else idx), None)
+    ws = _worker_servers.pop((device_id, compute_draft_slot(draft_model_idx)), None)
     if ws is not None:
         try:
             ws.stop()

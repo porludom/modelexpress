@@ -23,6 +23,7 @@ from ...metrics import enable_metrics
 from ...nixl_transfer import NixlTransferManager
 from ...metrics import metrics as selection_metrics
 from ...source_selection import configured_policy_label, get_configured_selector
+from ...rank_utils import get_draft_model_idx, compute_draft_slot
 from .adapter import _get_model_name, build_sglang_load_context
 from .artifacts import (
     _sglang_health_ready,
@@ -43,10 +44,7 @@ _nixl_managers: dict[tuple[int, int], NixlTransferManager] = {}
 
 
 def _registry_key(ctx: LoadContext) -> tuple[int, int]:
-    idx = getattr(ctx.load_config, "draft_model_idx", None)
-    if idx is None: # will have 0 idx, not to collide with main model
-        idx = 0 if getattr(ctx.model_config, "is_draft_model", False) else -1
-    return (ctx.device_id, idx)
+    return (ctx.device_id, compute_draft_slot(get_draft_model_idx(ctx.identity)))
 
 
 class MxModelLoader:

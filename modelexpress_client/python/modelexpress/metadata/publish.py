@@ -18,7 +18,7 @@ from .publisher import PublisherThread
 from .payload import tensor_source_metadata
 from ..client import MxClient
 from .. import p2p_pb2
-from ..rank_utils import parse_draft_model_idx, compute_draft_slot
+from ..rank_utils import get_draft_model_idx, compute_port, compute_draft_slot
 
 if TYPE_CHECKING:
     from ..nixl_transfer import NixlTransferManager
@@ -39,7 +39,7 @@ _worker_servers: dict[tuple[int, int], "WorkerGrpcServer"] = {}  # P2P mode only
 
 
 def _get_worker_server(device_id: int, draft_model_idx: int | None) -> "WorkerGrpcServer | None":
-    return _worker_servers.get((device_id, -1 if draft_model_idx is None else draft_model_idx))
+    return _worker_servers.get((device_id, compute_draft_slot(draft_model_idx)))
 
 
 def build_tensor_protos(
@@ -102,14 +102,8 @@ def publish_metadata_and_ready(
 
         grpc_base = envs.MX_WORKER_GRPC_PORT
 
-
-        draft_model_idx = parse_draft_model_idx(identity.model_name)
-        draft_slot = compute_draft_slot(draft_model_idx)
-        worker_grpc_port = (
-            grpc_base
-            + device_id * (envs.MAX_DRAFT_MODELS + 1)
-            + draft_slot
-        )
+        draft_model_idx = get_draft_model_idx(identity)
+        worker_grpc_port = compute_port(envs.MX_WORKER_GRPC_PORT, device_id, draft_model_idx, envs.MAX_DRAFT_MODELS)
 
         grpc_server = WorkerGrpcServer(
             tensor_protos=tensor_protos,
@@ -123,7 +117,7 @@ def publish_metadata_and_ready(
         )
         actual_port = grpc_server.start()
 
-        key = (device_id, -1 if draft_model_idx is None else draft_model_idx)
+        key = (device_id, compute_draft_slot(draft_model_idx))
         _worker_servers[key] = grpc_server
 
         worker = p2p_pb2.WorkerMetadata(

@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
-import re
 import logging
 
 import torch
+
+from . import p2p_pb2
 
 logger = logging.getLogger("modelexpress.rank_utils")
 
@@ -30,13 +31,14 @@ def get_global_rank(device: torch.device) -> int:
 
     return 0
 
-def parse_draft_model_idx(model_name: str) -> int | None:
-    """Extract draft_model_idx from model name."""
-
-    match = re.search(r"::draft(\d+)$", model_name)
-    if match:
-        return int(match.group(1))
-    return None
 
 def compute_draft_slot(draft_idx: int | None) -> int:
     return 0 if draft_idx is None else draft_idx + 1 # if None, then it is main model with index 0. Otherwise, idx + 1
+
+
+def compute_port(base_port: int, device_id: int, draft_idx: int | None, max_draft_models: int) -> int:
+    return base_port + device_id * (max_draft_models + 1) + compute_draft_slot(draft_idx)
+
+
+def get_draft_model_idx(identity: p2p_pb2.SourceIdentity) -> int | None:
+    return identity.draft_model_idx if identity.HasField("draft_model_idx") else None

@@ -118,6 +118,9 @@ message SourceIdentity {
   // Digest of source-type-specific compile/cache configuration not otherwise
   // represented by explicit fields.
   string compile_config_digest = 17;
+
+  // Draft model index
+  optional int32 draft_model_idx = 18;
 }
 
 // ============================================================================

@@ -29,7 +29,6 @@ from ...metadata.artifact_transfer import (
     torch_compile_cache_artifact_transfer,
 )
 from ...metadata.publisher import PublisherThread
-from ...rank_utils import parse_draft_model_idx
 
 logger = logging.getLogger("modelexpress.engines.vllm.artifacts")
 
@@ -261,6 +260,7 @@ def _install_vllm_cache_artifact_once(
         identity,
         engine_label="vLLM",
     )
+
 
 def _publish_vllm_cache_artifact(
     ctx: LoadContext,
