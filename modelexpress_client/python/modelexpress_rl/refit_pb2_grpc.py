@@ -8,8 +8,10 @@ import warnings
 
 from . import refit_pb2 as refit__pb2
 
-GRPC_GENERATED_VERSION = '1.83.1'
+GRPC_GENERATED_VERSION = '1.64.1'
 GRPC_VERSION = grpc.__version__
+EXPECTED_ERROR_RELEASE = '1.65.0'
+SCHEDULED_RELEASE_DATE = 'June 25, 2024'
 _version_not_supported = False
 
 try:
@@ -19,16 +21,19 @@ except ImportError:
     _version_not_supported = True
 
 if _version_not_supported:
-    raise RuntimeError(
+    warnings.warn(
         f'The grpc package installed is at version {GRPC_VERSION},'
         + ' but the generated code in refit_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+        + f' This warning will become an error in {EXPECTED_ERROR_RELEASE},'
+        + f' scheduled for release on {SCHEDULED_RELEASE_DATE}.',
+        RuntimeWarning
     )
 
 
-class RefitServiceStub:
+class RefitServiceStub(object):
     """Control-plane metadata for RL weight publication. Object-storage-backed
     versions own one global object URI; worker-sharded versions advertise
     per-worker manifests.
@@ -92,7 +97,7 @@ class RefitServiceStub:
                 _registered_method=True)
 
 
-class RefitServiceServicer:
+class RefitServiceServicer(object):
     """Control-plane metadata for RL weight publication. Object-storage-backed
     versions own one global object URI; worker-sharded versions advertise
     per-worker manifests.
@@ -225,7 +230,7 @@ def add_RefitServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RefitService:
+class RefitService(object):
     """Control-plane metadata for RL weight publication. Object-storage-backed
     versions own one global object URI; worker-sharded versions advertise
     per-worker manifests.
@@ -502,7 +507,7 @@ class RefitService:
             _registered_method=True)
 
 
-class RefitWorkerServiceStub:
+class RefitWorkerServiceStub(object):
     """Internal worker-to-worker API. The generator fetches the small transfer
     manifest here; tensor bytes remain on the advertised data-plane transport.
     """
@@ -520,7 +525,7 @@ class RefitWorkerServiceStub:
                 _registered_method=True)
 
 
-class RefitWorkerServiceServicer:
+class RefitWorkerServiceServicer(object):
     """Internal worker-to-worker API. The generator fetches the small transfer
     manifest here; tensor bytes remain on the advertised data-plane transport.
     """
@@ -547,7 +552,7 @@ def add_RefitWorkerServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RefitWorkerService:
+class RefitWorkerService(object):
     """Internal worker-to-worker API. The generator fetches the small transfer
     manifest here; tensor bytes remain on the advertised data-plane transport.
     """
